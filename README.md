@@ -1,4 +1,4 @@
 # heatwaves
-WHOI SSF 2024 Week 1
+WHOI SSF 2024
 
-Practice plotting NOAA OISSTv2.1 SST data in the North Atlantic.
+Practice plotting NOAA OISSTv2.1 SST and ERA5 data in the North Atlantic.
