@@ -9,6 +9,9 @@ Author: Haakon Pihlaja
 from matplotlib import pyplot as plt
 import cartopy.crs as ccrs
 import cartopy
+import xarray as xr
+import scipy
+import geopy.distance
 
 def anomalies(data, gb_time="time.month", rs_time="1MS", monthly=False):
     """
@@ -148,4 +151,84 @@ def monthly_plt(data, axs=[], quiver=False, contour=False):
             axs[i].set_title(anom_month["month"].values, fontsize=10)
 
         return anom_plot
-                
+
+def ohc_depth(temp, depth, cw=4180, p0= 1000):
+    """
+    Calculates depth-integrated ocean heat content 
+
+    :temp (DataArray): potential temperature, must contain dimensions "time", "depth", "lat", and "lon"
+    :depth (str or int): depth over which to integrate, use "full" to integrate over full depth
+    :cw (int): specific heat capacity of seawater (J kg^-1 K^-1), default value taken from Marshall and Plumb
+    :p0 (int): reference density (kg m^-3)
+    :return (DataArrays): depth-intergrated ocean heat content (J/m^2)
+    """
+    # Need to fill missing values, e.g. land or sea floor, with 0
+    # Otherwise NaNs will propagate through integration
+    temp = temp.fillna(0) 
+    
+    if depth == "full":           
+        integral = xr.apply_ufunc(scipy.integrate.trapezoid, temp, kwargs={"x":temp["depth"]},input_core_dims = [["depth"]])
+        ohc = cw * p0 * integral
+    else:
+        temp = temp.sel(depth=slice(0, depth))
+        integral = xr.apply_ufunc(scipy.integrate.trapezoid, temp, kwargs={"x":temp["depth"]},input_core_dims = [["depth"]])
+        ohc = cw * p0 * integral
+
+    return ohc
+
+def ohc_horiz(data, to_int):
+    """
+    Calculates horizontally-integrated ocean heat content. Assumes data has already been depth-integrated.
+
+    :data (DataArray): depth-integrated ocean heat content, must contain dimensions "time", "lat", and "lon"
+    :to_int (list): list of dimensions over which to integrate, should be one of ['lat'], ['lon'], ['lat','lon']
+    :return (DataArrays): horizontally-integrated ocean heat content (J)
+    """
+    if "lat" not in to_int:
+        q_bar_x = xr.DataArray()
+        xs = []
+
+        # Calculate distance between lines of longitude at each latitude there is data for
+        for lat in data["lat"].values:
+            pt1 = [lat, data["lon"].values[0]]
+            pt2 = [lat, data["lon"].values[1]]
+            dist = geopy.distance.distance(pt1, pt2)
+            xs.append(dist.m) 
+        
+        # Integrate along lines of latitude, taking dx to be the distances calculated in the above loop
+        for i in range(len(data['lat'].values)):
+            zonal_int = xr.apply_ufunc(scipy.integrate.trapezoid, data.isel(lat=i), kwargs={"dx":xs[i]},input_core_dims = [["lon"]])
+            if i == 0 :
+                q_bar_x = zonal_int
+            else:
+                q_bar_x = xr.concat([q_bar_x, zonal_int], dim="lat")
+
+        return q_bar_x
+
+    elif "lon" not in to_int:
+        # Integrate along lines of longitude, taking dx to be a constant 111 km
+        q_bar_y = xr.apply_ufunc(scipy.integrate.trapezoid, data, kwargs={"dx":111000},input_core_dims = [["lat"]])
+        return q_bar_y
+
+    else:
+        q_bar_x = xr.DataArray()
+        xs = []
+
+        # Calculate distance between lines of longitude at each latitude there is data for
+        for lat in data["lat"].values:
+            pt1 = [lat, data["lon"].values[0]]
+            pt2 = [lat, data["lon"].values[1]]
+            dist = geopy.distance.distance(pt1, pt2)
+            xs.append(dist.m) 
+        
+        # Integrate along lines of longitude, taking dx to be the distances calculated in the above loop
+        for i in range(len(data['lat'].values)):
+            zonal_int = xr.apply_ufunc(scipy.integrate.trapezoid, data.isel(lat=i), kwargs={"dx":xs[i]},input_core_dims = [["lon"]])
+            if i == 0 :
+                q_bar_x = zonal_int
+            else:
+                q_bar_x = xr.concat([q_bar_x, zonal_int], dim="lat")
+
+        # Integrate along lines of latitude
+        q_bar = xr.apply_ufunc(scipy.integrate.trapezoid, q_bar_x, kwargs={"dx":111000},input_core_dims = [["lat"]])
+        return q_bar
